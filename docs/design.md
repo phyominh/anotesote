@@ -1,6 +1,6 @@
 # Design: study-kb MCP (PocketBase)
 
-Status: draft for review · 2026-10-18
+Status: implemented · 2026-10-18
 
 `HANDOVER.md` is the base spec. This file records the decisions made in brainstorming and the points where the build deliberately deviates from or refines the handover. Where the two disagree, this file wins.
 
@@ -31,7 +31,23 @@ Status: draft for review · 2026-10-18
 5. **Smoke test portability.** `scripts/smoke-test.sh` needs only `bash`, `curl` and `jq`, and reads `BASE` and `SECRET`. It runs against a local throwaway PocketBase (temporary `pb_data`, random secret) during the build, and against the VPS after install.
 6. **Unit tests.** Plain Node `node:test`. The `lib/` modules use CommonJS `module.exports` with no Node-only APIs, so both goja's `require` and Node can load them unchanged.
 
+7. **Code layout.** `mcp.pb.js` only registers routes. The JSON-RPC dispatch lives in `lib/rpc.js`, and two small helpers were added: `lib/schema.js` (tool input validation, so bad arguments map to `-32602`) and `lib/util.js`.
+8. **Secret never logged.** The MCP routes use `$apis.skipSuccessActivityLog()`, and the handlers always reply themselves (they never throw). As a result PocketBase's request log, which records URLs, never stores the secret. Verified against the logs DB.
+9. **Rate limiting.** The built-in limiter is enabled, with an extra `/mcp/` rule of 300 requests per 10 seconds (the same as the `/api/` default), since the default rules only cover `/api/`.
+10. **Mermaid edge labels** use the pipe form (`A -.-|"label"| B`, `A -->|"label"| B`) instead of `A -. label .- B`. They render the same, and the quoted pipe form escapes safely. Output was validated with the real `mermaid@11` parser, using labels that contain quotes, brackets, pipes and Japanese text.
+11. **Graph nodes.** A topic node's `mastery` is its rolled-up mastery (card-weighted over its subtree). Nodes carry a `reviewed` flag, which drives the `new` class. Flow mode drops nodes that have no link edges.
+12. **Smoke test isolation.** Tests run under a random root topic (`smoke-xxxxxx/graphs/shortest-path` instead of `dsa/graphs/shortest-path`), so running against production never touches or deletes real data.
+13. **Small additions.** `reviews` has an `updated` autodate like the other collections. `list_topics` returns `{items, total}`. `link` returns `existed: true` for a no-op. `record_reviews` returns `self_mastery` for each affected topic.
+
 Everything else follows the handover as written: architecture, auth, transport, the 11 tools, schema, SM-2, mastery, graph output, logging, security notes and out-of-scope items.
+
+## Verification (in the build container)
+
+- `npm test`: 23 unit tests (SM-2, mastery, graph/Mermaid, schema validator).
+- `scripts/smoke-test.sh` against a locally built PocketBase v0.40.5: 71 checks, all §9.2 steps plus move/rename.
+- The official `@modelcontextprotocol/sdk` 1.32.1 client connects, lists tools and calls them over Streamable HTTP.
+- Migrations go up and down cleanly. With `MCP_SECRET` unset, every request gets 404.
+- Not tested here: `install.sh` end to end (no systemd here, and GitHub release downloads are blocked). It passes `shellcheck`.
 
 ## Build order
 
