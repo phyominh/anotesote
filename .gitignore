@@ -1,0 +1,27 @@
+# PocketBase runtime data and binary
+pb_data/
+pocketbase
+pocketbase.exe
+*.zip
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+deploy/env
+
+# Node (local unit tests only)
+node_modules/
+npm-debug.log*
+coverage/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Scratch
+tmp/
+*.log

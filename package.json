@@ -1,0 +1,13 @@
+{
+  "name": "study-kb-mcp",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Personal study knowledge base exposed to Claude as an MCP connector, running inside PocketBase.",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
