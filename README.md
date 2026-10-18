@@ -31,7 +31,7 @@ pb_hooks/lib/graph.js     graph assembly + Mermaid rendering (pure)
 pb_hooks/lib/schema.js    tool input validation (pure)
 pb_hooks/lib/util.js      shared helpers
 pb_migrations/            topics, cards, reviews, links, backup + rate-limit settings
-deploy/                   systemd unit, env example, Caddy snippet (option A only)
+deploy/                   systemd unit, nginx site template, env example, Caddy snippet
 scripts/install.sh        install / upgrade on the VPS
 scripts/smoke-test.sh     live acceptance test (curl + jq)
 test/                     Node unit tests for the pure modules
@@ -43,16 +43,28 @@ On the Debian VPS, as root, from a checkout of this repo:
 
 ```sh
 git clone https://github.com/phyominh/anotesote.git && cd anotesote
-sudo scripts/install.sh            # option B: PocketBase serves ans.mhetsu.com on :80/:443
+sudo scripts/install.sh --nginx     # nginx already handles HTTPS on this VPS
 ```
 
-Before running it, point a DNS `A` record for `ans.mhetsu.com` at the VPS so Let's Encrypt can issue the certificate on first request. The script:
+Before running it, point a DNS `A` record for `ans.mhetsu.com` at the VPS so the certificate can be issued. The script:
 
-1. creates the `pocketbase` system user and `/opt/pocketbase`;
-2. downloads the official v0.40.5 release and verifies its checksum;
-3. copies `pb_hooks/` and `pb_migrations/`;
-4. creates `/etc/pocketbase/env` (root, mode 600) with a random `MCP_SECRET`, or keeps the existing one;
-5. installs and starts the systemd unit, and opens 80/443 in `ufw` if it is active.
+1. checks that the ports it needs are free (in standalone mode it refuses to run if anything already holds 80/443);
+2. creates the `pocketbase` system user and `/opt/pocketbase`;
+3. downloads the official v0.40.5 release and verifies its checksum;
+4. copies `pb_hooks/` and `pb_migrations/`;
+5. creates `/etc/pocketbase/env` (root, mode 600) with a random `MCP_SECRET`, or keeps the existing one;
+6. installs and starts the systemd unit, with PocketBase listening only on `127.0.0.1:8090`;
+7. with `--nginx`: writes `/etc/nginx/sites-available/ans.mhetsu.com.conf` from [`deploy/nginx.conf`](deploy/nginx.conf) (it keeps an existing file), enables it, runs `nginx -t` and reloads nginx, then runs `certbot --nginx -d ans.mhetsu.com` if certbot is installed.
+
+The nginx site turns off the access and error logs for `/mcp/`, because the URL contains the secret. If you write your own proxy config, do the same.
+
+| Mode | Use when |
+|---|---|
+| `--nginx` | nginx already serves HTTPS on the VPS (this setup) |
+| `--proxy` | another reverse proxy (Caddy, Traefik…) that you configure yourself: proxy `ans.mhetsu.com` to `127.0.0.1:8090` |
+| no flag | nothing else uses ports 80/443: PocketBase gets its own Let's Encrypt certificate (opens 80/443 in `ufw` if active) |
+
+Behind a proxy, set the admin UI's **Settings → Application → User IP proxy headers** to `X-Real-IP`, so rate limiting and logs see real client IPs rather than `127.0.0.1`.
 
 Migrations run automatically when the service starts. Then create the superuser. Either open the one-time installer link PocketBase prints in `journalctl -u pocketbase` on first start, or run:
 

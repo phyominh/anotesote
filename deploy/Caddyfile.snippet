@@ -1,5 +1,5 @@
-# Option A only (Caddy already running on the VPS). Not used with option B.
-# Run PocketBase with --http=127.0.0.1:8090 and add:
+# For a VPS running Caddy instead of nginx: install with `scripts/install.sh --proxy`.
+# PocketBase then listens on 127.0.0.1:8090; add:
 ans.mhetsu.com {
 	reverse_proxy 127.0.0.1:8090
 }
