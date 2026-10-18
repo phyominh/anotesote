@@ -1,0 +1,33 @@
+# /etc/systemd/system/pocketbase.service
+# Option B: PocketBase serves the domain itself with Let's Encrypt on :80/:443.
+# install.sh fills in @SERVE_ARGS@ (the domain for option B, or
+# --http=127.0.0.1:8090 for option A behind Caddy).
+[Unit]
+Description=PocketBase (study KB + MCP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pocketbase
+Group=pocketbase
+WorkingDirectory=/opt/pocketbase
+EnvironmentFile=/etc/pocketbase/env
+ExecStart=/opt/pocketbase/pocketbase serve @SERVE_ARGS@
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=4096
+
+# Option B binds :80 and :443 as a non-root user.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Hardening: only pb_data is writable.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/opt/pocketbase/pb_data
+
+[Install]
+WantedBy=multi-user.target
