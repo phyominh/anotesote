@@ -5,7 +5,7 @@
   "description": "Personal study knowledge base exposed to Claude as an MCP connector, running inside PocketBase.",
   "license": "MIT",
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test"
   },
   "engines": {
     "node": ">=20"
