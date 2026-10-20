@@ -9,7 +9,7 @@ Status: implemented · 2026-10-18
 | Question | Answer |
 |---|---|
 | Domain | `ans.mhetsu.com`. Endpoint: `https://ans.mhetsu.com/mcp/<SECRET>` |
-| Caddy | Not present → **option B**: PocketBase serves `ans.mhetsu.com` directly with Let's Encrypt on ports 80/443 |
+| Caddy | Not present. **nginx already serves HTTPS on the VPS**, so PocketBase listens on `127.0.0.1:8090` behind it (`install.sh --nginx`, site template in `deploy/nginx.conf`, certificate via certbot). This is option A with nginx in place of Caddy. The nginx site disables the access and error logs for `/mcp/`, because the URL carries the secret. The standalone option B remains as the script's default and refuses to run when 80/443 are taken |
 | SSH / deploy | Out of scope for this build session. The repo ships `scripts/install.sh`, which the owner runs on the VPS |
 | Projects | `english, japanese, maths, dsa` |
 | Backups | Local only: cron `0 3 * * *`, keep 7. S3 can be added later in the admin UI with no code change |
