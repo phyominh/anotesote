@@ -8,6 +8,9 @@
 # touched, and it is all deleted at the end, even if a check fails.
 set -uo pipefail
 
+for bin in curl jq; do
+  command -v "$bin" >/dev/null || { echo "smoke-test needs $bin: sudo apt-get install -y $bin" >&2; exit 2; }
+done
 : "${BASE:?set BASE, e.g. https://ans.mhetsu.com}"
 : "${SECRET:?set SECRET}"
 BASE="${BASE%/}"
