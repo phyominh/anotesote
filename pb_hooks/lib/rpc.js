@@ -107,8 +107,29 @@ function handleMessage(app, msg) {
   }
 }
 
+// POST /mcp/{secret}: legacy secret-in-URL auth (disabled when MCP_SECRET is unset).
 function handlePost(e) {
   if (!secretOk(e)) return e.noContent(404);
+  return dispatch(e);
+}
+
+// POST /mcp: OAuth bearer token auth.
+function handleBearerPost(e) {
+  var oauth = require(__hooks + "/lib/oauth.js");
+  if (!oauth.enabled()) return e.noContent(404);
+  var auth = oauth.verifyBearer(e);
+  if (!auth.ok) return oauth.challenge(e, auth.error);
+  return dispatch(e);
+}
+
+function handleBearerOther(e) {
+  var oauth = require(__hooks + "/lib/oauth.js");
+  if (!oauth.enabled()) return e.noContent(404);
+  e.response.header().set("Allow", "POST");
+  return e.noContent(405);
+}
+
+function dispatch(e) {
   var app = e.app || $app;
   var body;
   try {
@@ -149,5 +170,7 @@ function handleOther(e) {
 module.exports = {
   handlePost: handlePost,
   handleOther: handleOther,
+  handleBearerPost: handleBearerPost,
+  handleBearerOther: handleBearerOther,
   PROTOCOL_VERSIONS: PROTOCOL_VERSIONS,
 };

@@ -102,12 +102,22 @@ chmod -R u=rwX,g=rX,o= "$PREFIX/pb_hooks" "$PREFIX/pb_migrations"
 
 say "Secret ($ENV_FILE)"
 install -d -o root -g root -m 755 "$(dirname "$ENV_FILE")"
-if [ ! -s "$ENV_FILE" ] || ! grep -qE '^MCP_SECRET=[0-9a-f]{32,}$' "$ENV_FILE"; then
+# Only a new env file gets a secret: removing MCP_SECRET later (to turn off
+# the legacy secret URL) must survive re-runs.
+if [ ! -s "$ENV_FILE" ]; then
   umask 077
   printf 'MCP_SECRET=%s\n' "$(openssl rand -hex 32)" > "$ENV_FILE"
   echo "generated a new secret"
-else
+elif grep -q '^MCP_SECRET=' "$ENV_FILE"; then
   echo "keeping the existing secret"
+else
+  echo "no MCP_SECRET: the legacy secret URL stays off"
+fi
+# Public base URL for OAuth discovery documents and token audience.
+if grep -q '^PUBLIC_URL=' "$ENV_FILE"; then
+  sed -i "s|^PUBLIC_URL=.*|PUBLIC_URL=https://$DOMAIN|" "$ENV_FILE"
+else
+  printf 'PUBLIC_URL=https://%s\n' "$DOMAIN" >> "$ENV_FILE"
 fi
 chown root:root "$ENV_FILE"
 chmod 600 "$ENV_FILE"
@@ -149,6 +159,27 @@ if [ "$MODE" = "nginx" ]; then
   fi
   if [ -e "$SITE" ]; then
     echo "keeping existing $SITE (delete it to regenerate)"
+    # Sites written by older versions lack the exact /mcp block (OAuth):
+    # insert it before each /mcp/ block, keeping certbot's edits intact.
+    if ! grep -q "location = /mcp " "$SITE" && grep -q "location /mcp/ {" "$SITE"; then
+      cp "$SITE" "$SITE.bak"
+      awk -v port="$PORT" '
+        /^[[:space:]]*location \/mcp\/ \{/ {
+          print "    location = /mcp {"
+          print "        proxy_pass http://127.0.0.1:" port ";"
+          print "        proxy_http_version 1.1;"
+          print "        proxy_set_header Host $host;"
+          print "        proxy_set_header X-Real-IP $remote_addr;"
+          print "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;"
+          print "        proxy_set_header X-Forwarded-Proto $scheme;"
+          print "        proxy_read_timeout 120s;"
+          print "    }"
+          print ""
+        }
+        { print }
+      ' "$SITE.bak" > "$SITE"
+      echo "added the OAuth /mcp location to $SITE (backup: $SITE.bak)"
+    fi
   else
     sed -e "s|@DOMAIN@|$DOMAIN|g" -e "s|@PORT@|$PORT|g" "$REPO_DIR/deploy/nginx.conf" > "$SITE"
     echo "wrote $SITE"
@@ -190,11 +221,14 @@ Done. Next steps:
         sudo -u pocketbase $PREFIX/pocketbase superuser upsert <email> <password> --dir=$PREFIX/pb_data
      Then sign in at https://$DOMAIN/_/ and enable MFA.
 $PROXY_STEP
-  3. Run the smoke test (needs curl and jq):
+  3. Run the smoke test (needs curl and jq; add ADMIN_EMAIL=... ADMIN_PASSWORD=...
+     in front to also test the OAuth sign-in):
        BASE=https://$DOMAIN SECRET=\$(sudo sed -n 's/^MCP_SECRET=//p' $ENV_FILE) scripts/smoke-test.sh
 
-  4. Connector URL for Claude (treat it like a password):
-       https://$DOMAIN/mcp/<MCP_SECRET from $ENV_FILE>
+  4. Add the connector in Claude with this URL; Claude opens the sign-in page:
+       https://$DOMAIN/mcp
+     (The older secret URL https://$DOMAIN/mcp/<MCP_SECRET> still works until
+     you remove MCP_SECRET from $ENV_FILE.)
 
 Logs: journalctl -u pocketbase -f
 EOF
