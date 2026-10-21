@@ -40,8 +40,9 @@ say() { printf '\n==> %s\n' "$*"; }
 die() { echo "error: $*" >&2; exit 1; }
 
 # Who is listening on a TCP port (empty when free). Ignores our own service.
+# `|| true`: grep exits 1 on a free port, which would abort under pipefail.
 port_owner() {
-  ss -ltnpH "sport = :$1" 2>/dev/null | grep -v '"pocketbase"' | sed -n 's/.*users:(("\([^"]*\)".*/\1/p' | sort -u | tr '\n' ' '
+  ss -ltnpH "sport = :$1" 2>/dev/null | grep -v '"pocketbase"' | sed -n 's/.*users:(("\([^"]*\)".*/\1/p' | sort -u | tr '\n' ' ' || true
 }
 
 say "Dependencies"
