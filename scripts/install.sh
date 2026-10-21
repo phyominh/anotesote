@@ -40,8 +40,9 @@ say() { printf '\n==> %s\n' "$*"; }
 die() { echo "error: $*" >&2; exit 1; }
 
 # Who is listening on a TCP port (empty when free). Ignores our own service.
+# `|| true`: grep exits 1 on a free port, which would abort under pipefail.
 port_owner() {
-  ss -ltnpH "sport = :$1" 2>/dev/null | grep -v '"pocketbase"' | sed -n 's/.*users:(("\([^"]*\)".*/\1/p' | sort -u | tr '\n' ' '
+  ss -ltnpH "sport = :$1" 2>/dev/null | grep -v '"pocketbase"' | sed -n 's/.*users:(("\([^"]*\)".*/\1/p' | sort -u | tr '\n' ' ' || true
 }
 
 say "Dependencies"
@@ -181,8 +182,10 @@ cat <<EOF
 Done. Next steps:
 
   1. Create the superuser. Either open the one-time installer link that
-     PocketBase prints on first start:
-       journalctl -u pocketbase --no-pager | grep -A1 -i installer
+     PocketBase prints on start while no superuser exists (it expires after
+     ~30 minutes; restart the service for a new one):
+       sudo journalctl -u pocketbase --no-pager | grep pbinstall | tail -1
+     It starts with http://127.0.0.1:PORT; open it as https://$DOMAIN/_/#/pbinstall/...
      or run (leading space keeps the password out of shell history):
         sudo -u pocketbase $PREFIX/pocketbase superuser upsert <email> <password> --dir=$PREFIX/pb_data
      Then sign in at https://$DOMAIN/_/ and enable MFA.

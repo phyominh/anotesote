@@ -47,7 +47,7 @@ Everything else follows the handover as written: architecture, auth, transport, 
 - `scripts/smoke-test.sh` against a locally built PocketBase v0.40.5: 71 checks, all §9.2 steps plus move/rename.
 - The official `@modelcontextprotocol/sdk` 1.32.1 client connects, lists tools and calls them over Streamable HTTP.
 - Migrations go up and down cleanly. With `MCP_SECRET` unset, every request gets 404.
-- Not tested here: `install.sh` end to end (no systemd here, and GitHub release downloads are blocked). It passes `shellcheck`.
+- `install.sh --nginx --port 8091` runs end to end in the build container, with stand-ins only for `systemctl`, `certbot` and the GitHub download (served from the locally built v0.40.5 zip with a real checksum). Fresh install and re-run both succeed. Afterwards PocketBase runs as `pocketbase` on 127.0.0.1:8091, the documented `superuser upsert` works, the smoke test passes through nginx (71/71), and the secret appears in neither nginx log. Not covered: real systemd, real certbot, IPv6 (the container has none). It passes `shellcheck`.
 
 ## Build order
 

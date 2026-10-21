@@ -66,7 +66,7 @@ The nginx site turns off the access and error logs for `/mcp/`, because the URL 
 
 Behind a proxy, set the admin UI's **Settings → Application → User IP proxy headers** to `X-Real-IP`, so rate limiting and logs see real client IPs rather than `127.0.0.1`.
 
-Migrations run automatically when the service starts. Then create the superuser. Either open the one-time installer link PocketBase prints in `journalctl -u pocketbase` on first start, or run:
+Migrations run automatically when the service starts. Then create the superuser. Either open the one-time installer link PocketBase prints on start while no superuser exists: `sudo journalctl -u pocketbase --no-pager | grep pbinstall | tail -1`. It expires after about 30 minutes (run `sudo systemctl restart pocketbase` for a new one). Behind nginx it starts with `http://127.0.0.1:8090`, so open it as `https://ans.mhetsu.com/_/#/pbinstall/...`. Or run:
 
 ```sh
  sudo -u pocketbase /opt/pocketbase/pocketbase superuser upsert <email> <password> --dir=/opt/pocketbase/pb_data
