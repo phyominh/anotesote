@@ -39,11 +39,23 @@ Status: implemented · 2026-10-18
 12. **Smoke test isolation.** Tests run under a random root topic (`smoke-xxxxxx/graphs/shortest-path` instead of `dsa/graphs/shortest-path`), so running against production never touches or deletes real data.
 13. **Small additions.** `reviews` has an `updated` autodate like the other collections. `list_topics` returns `{items, total}`. `link` returns `existed: true` for a no-op. `record_reviews` returns `self_mastery` for each affected topic.
 
+14. **OAuth 2.1 (added after the handover, which listed OAuth as out of scope).** `POST /mcp` takes a bearer token. The hook is its own authorization server, all in `lib/oauth.js` and `oauth.pb.js`:
+    - Discovery: RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource[/mcp]` and RFC 8414 metadata at `/.well-known/oauth-authorization-server`.
+    - Clients: RFC 7591 dynamic registration (public clients only), plus client ID metadata documents fetched only from allowlisted hosts.
+    - Sign-in: a sign-in and consent page that checks PocketBase superuser credentials.
+    - Codes: authorization codes require PKCE S256, last 5 minutes and work once.
+    - Tokens: `resource` (RFC 8707) is checked and bound to each token. Access tokens last 1 hour. Refresh tokens last 90 days and rotate on use, and reusing one revokes the whole token family. RFC 7009 revocation is supported.
+    - Storage: tokens and codes are stored only as SHA-256 hashes, in `oauth_clients`, `oauth_codes` and `oauth_tokens`.
+    - Redirects: the redirect URI allowlist defaults to Claude's two callbacks.
+    - The legacy `/mcp/{secret}` route remains until `MCP_SECRET` is removed. `PUBLIC_URL` (written by `install.sh`) fixes the issuer and resource URLs.
+    - nginx needs an exact `location = /mcp` block: otherwise the `/mcp/` prefix block makes nginx answer `POST /mcp` with a 301. `install.sh` adds that block to sites written by older versions.
+
 Everything else follows the handover as written: architecture, auth, transport, the 11 tools, schema, SM-2, mastery, graph output, logging, security notes and out-of-scope items.
 
 ## Verification (in the build container)
 
-- `npm test`: 23 unit tests (SM-2, mastery, graph/Mermaid, schema validator).
+- `npm test`: 28 unit tests (SM-2, mastery, graph/Mermaid, schema validator, PKCE including the RFC 7636 vector, redirect allowlist).
+- OAuth: the smoke test's step 16 (20 checks: discovery, registration, sign-in, PKCE, single-use codes, refresh rotation, reuse detection, revocation) passes directly and through nginx. The official MCP SDK 1.32.1 client completes its own OAuth discovery, registration, sign-in and token flow and calls tools, also through nginx. The sign-in page was checked in Chromium in light and dark mode at desktop and phone widths.
 - `scripts/smoke-test.sh` against a locally built PocketBase v0.40.5: 71 checks, all §9.2 steps plus move/rename.
 - The official `@modelcontextprotocol/sdk` 1.32.1 client connects, lists tools and calls them over Streamable HTTP.
 - Migrations go up and down cleanly. With `MCP_SECRET` unset, every request gets 404.

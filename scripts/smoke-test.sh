@@ -3,11 +3,18 @@
 #
 #   BASE=https://ans.mhetsu.com SECRET=... scripts/smoke-test.sh
 #
+# To also run the full OAuth sign-in flow (step 16), pass the PocketBase admin
+# credentials: ADMIN_EMAIL=... ADMIN_PASSWORD=... (and have openssl). Without
+# them only the OAuth checks that need no sign-in run.
+#
 # Needs bash, curl and jq. Everything is created under a random root topic
 # (smoke-XXXXXX) in the dsa and japanese projects, so real data is never
 # touched, and it is all deleted at the end, even if a check fails.
 set -uo pipefail
 
+for bin in curl jq; do
+  command -v "$bin" >/dev/null || { echo "smoke-test needs $bin: sudo apt-get install -y $bin" >&2; exit 2; }
+done
 : "${BASE:?set BASE, e.g. https://ans.mhetsu.com}"
 : "${SECRET:?set SECRET}"
 BASE="${BASE%/}"
@@ -256,6 +263,74 @@ for c in topics cards reviews links; do
   body=$(curl -sS "$BASE/api/collections/$c/records")
   check "public REST list of $c returns no data ($code)" nodata "$code" "$body"
 done
+
+echo "16. OAuth"
+REDIRECT="https://claude.ai/api/mcp/auth_callback"
+RES=$(curl -sS -D - -o /dev/null -X POST "$BASE/mcp" -H 'Content-Type: application/json' --data-binary '{"jsonrpc":"2.0","id":1,"method":"ping"}')
+check "POST /mcp without a token -> 401" grep -q '^HTTP/[0-9.]* 401' <<<"$RES"
+check "401 carries WWW-Authenticate resource_metadata" grep -qi 'www-authenticate: Bearer resource_metadata="' <<<"$RES"
+RES=$(curl -sS "$BASE/.well-known/oauth-protected-resource/mcp")
+check "protected resource metadata names /mcp" jqt ".resource | endswith(\"/mcp\")"
+RES=$(curl -sS "$BASE/.well-known/oauth-authorization-server")
+check "authorization server metadata: S256 + registration" jqt '(.code_challenge_methods_supported | index("S256")) != null and (.registration_endpoint | endswith("/oauth/register"))'
+check "registration of a foreign redirect URI is refused" test "$(status POST "$BASE/oauth/register" '{"redirect_uris":["https://evil.example/cb"]}')" = 400
+RES=$(curl -sS -X POST "$BASE/oauth/register" -H 'Content-Type: application/json' \
+  --data-binary "{\"client_name\":\"smoke-test\",\"redirect_uris\":[\"$REDIRECT\"],\"token_endpoint_auth_method\":\"none\"}")
+CLIENT=$(jq -r '.client_id // empty' <<<"$RES")
+check "dynamic client registration" test -n "$CLIENT"
+check "unknown client gets an error page, not a redirect" test "$(status GET "$BASE/oauth/authorize?client_id=nope&redirect_uri=$REDIRECT&response_type=code")" = 400
+check "bogus bearer token -> 401" test "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/mcp" -H 'Authorization: Bearer skb_at_bogus' -d '{}')" = 401
+
+if [ -n "${ADMIN_EMAIL:-}" ] && [ -n "${ADMIN_PASSWORD:-}" ] && command -v openssl >/dev/null; then
+  VERIFIER=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 64)
+  CHALLENGE=$(printf '%s' "$VERIFIER" | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+  STATE="st-$RUN"
+  AUTHQ="response_type=code&client_id=$CLIENT&redirect_uri=$REDIRECT&code_challenge=$CHALLENGE&code_challenge_method=S256&state=$STATE&scope=mcp&resource=$BASE/mcp"
+  check "sign-in page renders" test "$(status GET "$BASE/oauth/authorize?$AUTHQ")" = 200
+  form() { # form <email> <password> → redirect URL ("" when none)
+    curl -sS -o /dev/null -w '%{redirect_url}' -X POST "$BASE/oauth/authorize" \
+      --data-urlencode "response_type=code" --data-urlencode "client_id=$CLIENT" --data-urlencode "redirect_uri=$REDIRECT" \
+      --data-urlencode "code_challenge=$CHALLENGE" --data-urlencode "code_challenge_method=S256" --data-urlencode "state=$STATE" \
+      --data-urlencode "scope=mcp" --data-urlencode "resource=$BASE/mcp" --data-urlencode "decision=allow" \
+      --data-urlencode "email=$1" --data-urlencode "password=$2"
+  }
+  check "wrong password does not redirect" test -z "$(form "$ADMIN_EMAIL" "wrong-password-$RUN")"
+  LOC=$(form "$ADMIN_EMAIL" "$ADMIN_PASSWORD")
+  CODE=$(sed -n 's/.*[?&]code=\([^&]*\).*/\1/p' <<<"$LOC")
+  check "correct sign-in redirects to the client with code and state" bash -c "[[ '$LOC' == $REDIRECT?* && '$LOC' == *state=$STATE* && -n '$CODE' ]]"
+  tok() { curl -sS -X POST "$BASE/oauth/token" "$@"; }
+  RES=$(tok --data-urlencode grant_type=authorization_code --data-urlencode "code=$CODE" --data-urlencode "client_id=$CLIENT" \
+    --data-urlencode "redirect_uri=$REDIRECT" --data-urlencode "code_verifier=wrong-${VERIFIER}")
+  check "wrong PKCE verifier is refused" jqt '.error == "invalid_grant"'
+  # The code was consumed by the failed attempt; get a fresh one.
+  LOC=$(form "$ADMIN_EMAIL" "$ADMIN_PASSWORD")
+  CODE=$(sed -n 's/.*[?&]code=\([^&]*\).*/\1/p' <<<"$LOC")
+  RES=$(tok --data-urlencode grant_type=authorization_code --data-urlencode "code=$CODE" --data-urlencode "client_id=$CLIENT" \
+    --data-urlencode "redirect_uri=$REDIRECT" --data-urlencode "code_verifier=$VERIFIER" --data-urlencode "resource=$BASE/mcp")
+  check "code exchange returns access + refresh tokens" jqt '.token_type == "Bearer" and (.access_token | startswith("skb_at_")) and (.refresh_token | startswith("skb_rt_"))'
+  AT=$(jq -r .access_token <<<"$RES")
+  RT=$(jq -r .refresh_token <<<"$RES")
+  RES=$(tok --data-urlencode grant_type=authorization_code --data-urlencode "code=$CODE" --data-urlencode "client_id=$CLIENT" \
+    --data-urlencode "redirect_uri=$REDIRECT" --data-urlencode "code_verifier=$VERIFIER")
+  check "authorization code is single-use" jqt '.error == "invalid_grant"'
+  bearer() { curl -sS -X POST "$BASE/mcp" -H "Authorization: Bearer $1" -H 'Content-Type: application/json' --data-binary "$2"; }
+  RES=$(bearer "$AT" '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+  check "bearer token works on POST /mcp" jqt '.result.tools | length == 11'
+  RES=$(tok --data-urlencode grant_type=refresh_token --data-urlencode "refresh_token=$RT" --data-urlencode "client_id=$CLIENT")
+  check "refresh returns a rotated token pair" jqt "(.access_token | startswith(\"skb_at_\")) and .refresh_token != \"$RT\""
+  AT2=$(jq -r .access_token <<<"$RES")
+  RT2=$(jq -r .refresh_token <<<"$RES")
+  RES=$(bearer "$AT2" '{"jsonrpc":"2.0","id":2,"method":"ping"}')
+  check "refreshed access token works" jqt '.result == {}'
+  RES=$(tok --data-urlencode grant_type=refresh_token --data-urlencode "refresh_token=$RT" --data-urlencode "client_id=$CLIENT")
+  check "reusing a rotated refresh token is refused" jqt '.error == "invalid_grant"'
+  check "...and revokes the whole token family" test "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/mcp" -H "Authorization: Bearer $AT2" -d '{}')" = 401
+  RES=$(tok --data-urlencode grant_type=refresh_token --data-urlencode "refresh_token=$RT2" --data-urlencode "client_id=$CLIENT")
+  check "family revocation also kills the newest refresh token" jqt '.error == "invalid_grant"'
+  curl -sS -o /dev/null -X POST "$BASE/oauth/revoke" --data-urlencode "token=$RT2"
+else
+  echo "  (skipping OAuth sign-in flow: set ADMIN_EMAIL and ADMIN_PASSWORD to run it)"
+fi
 
 echo "15. cleanup (on exit)"
 trap - EXIT

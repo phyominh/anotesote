@@ -21,7 +21,10 @@ The full spec is [`HANDOVER.md`](HANDOVER.md). [`docs/design.md`](docs/design.md
 ## Layout
 
 ```
-pb_hooks/mcp.pb.js        routes: POST/GET/DELETE /mcp/{secret}
+pb_hooks/mcp.pb.js        routes: /mcp (OAuth bearer) and /mcp/{secret} (legacy)
+pb_hooks/oauth.pb.js      routes: OAuth discovery, register, authorize, token, revoke
+pb_hooks/lib/oauth.js     OAuth 2.1 authorization server + sign-in page
+pb_hooks/lib/pkce.js      PKCE and redirect allowlist checks (pure)
 pb_hooks/lib/rpc.js       JSON-RPC / MCP transport (stateless JSON mode)
 pb_hooks/lib/tools.js     the 11 tools: definitions + handlers
 pb_hooks/lib/topics.js    topic paths, upsert, move/rename, mastery recompute
@@ -30,7 +33,7 @@ pb_hooks/lib/mastery.js   EMA, topic blend, read-time rollup (pure)
 pb_hooks/lib/graph.js     graph assembly + Mermaid rendering (pure)
 pb_hooks/lib/schema.js    tool input validation (pure)
 pb_hooks/lib/util.js      shared helpers
-pb_migrations/            topics, cards, reviews, links, backup + rate-limit settings
+pb_migrations/            topics, cards, reviews, links, oauth_*, backup + rate-limit settings
 deploy/                   systemd unit, nginx site template, env example, Caddy snippet
 scripts/install.sh        install / upgrade on the VPS
 scripts/smoke-test.sh     live acceptance test (curl + jq)
@@ -76,12 +79,23 @@ Migrations run automatically when the service starts. Then create the superuser.
 
 ## Connect Claude
 
-1. Get the URL: `https://ans.mhetsu.com/mcp/` followed by the value in `sudo cat /etc/pocketbase/env`. Treat it like a password: keep it out of git, chats, screenshots and shell history.
-2. In Claude, go to **Settings → Connectors → Add custom connector**. Paste the URL and leave OAuth empty.
+1. In Claude, go to **Settings → Connectors → Add custom connector**. Name it `study-kb`, enter `https://ans.mhetsu.com/mcp` and leave the OAuth client ID and secret fields empty.
+2. Click **Connect**. Claude opens the study-kb sign-in page: sign in with your PocketBase admin email and password and choose **Sign in and allow**. You land back in Claude, connected.
 3. Enable the connector in the relevant chats and projects.
 4. Add this to each study project's instructions, changing the project name:
 
    > Use the study-kb connector with project=`japanese`. Save new knowledge as atomic cards under sensible topic paths. After every exercise or drill, call record_reviews with grades. When I ask for a map of what I know, call get_graph and draw it.
+
+### Authentication
+
+The connector signs in with **OAuth 2.1** (the MCP authorization spec). Claude discovers the server's OAuth endpoints, registers itself, and sends you to the sign-in page, which checks your PocketBase superuser email and password. Claude then holds a 1-hour access token and a 90-day refresh token, which rotates on every use. A reused refresh token revokes that whole sign-in. The server stores only SHA-256 hashes of codes and tokens.
+
+- **Revoke Claude's access:** in the admin UI, open `oauth_tokens` and delete the rows, or tick `revoked`. Claude will ask you to sign in again.
+- **Redirects are allowlisted** to Claude's callbacks (`https://claude.ai/api/mcp/auth_callback`, `https://claude.com/api/mcp/auth_callback`), so a stolen password still can't send codes elsewhere. To add more, set `OAUTH_REDIRECT_URIS` in `/etc/pocketbase/env`. To test with the MCP Inspector, set `OAUTH_ALLOW_LOOPBACK=1` temporarily.
+- **The sign-in form is rate-limited** to 10 attempts per 5 minutes per IP.
+- **Legacy secret URL:** `https://ans.mhetsu.com/mcp/<MCP_SECRET>` keeps working while `MCP_SECRET` is in `/etc/pocketbase/env`. Once Claude is connected through OAuth, delete that line and restart PocketBase to turn it off. The installer won't add it back.
+
+See [`deploy/env.example`](deploy/env.example) for every setting.
 
 ## Tools
 
@@ -116,7 +130,7 @@ export MCP_SECRET=$(openssl rand -hex 32)
 BASE=http://127.0.0.1:8090 SECRET=$MCP_SECRET scripts/smoke-test.sh
 ```
 
-The smoke test works under a random root topic (`smoke-xxxxxx`) in the `dsa` and `japanese` projects and deletes everything it created, so it is also safe to run against production. You can also explore the endpoint with `npx @modelcontextprotocol/inspector`.
+Add `ADMIN_EMAIL=... ADMIN_PASSWORD=...` to also run the OAuth sign-in flow: registration, PKCE, token exchange, refresh rotation, reuse detection and revocation. That part signs in a few times, and the sign-in form allows 10 attempts per 5 minutes, so wait a few minutes between repeated runs. The smoke test works under a random root topic (`smoke-xxxxxx`) in the `dsa` and `japanese` projects and deletes everything it created, so it is also safe to run against production. You can also explore the endpoint with `npx @modelcontextprotocol/inspector`.
 
 ## Operations
 
@@ -124,7 +138,7 @@ The smoke test works under a random root topic (`smoke-xxxxxx`) in the `dsa` and
 
 **Deploying hook changes.** Run `git pull && sudo scripts/install.sh` again. It is idempotent and keeps the data and the secret.
 
-**Rotating the secret.** Edit `/etc/pocketbase/env` (for example `MCP_SECRET=$(openssl rand -hex 32)`), run `sudo systemctl restart pocketbase`, then update the connector URL in Claude.
+**Rotating the legacy secret.** Edit `MCP_SECRET` in `/etc/pocketbase/env` (for example to the output of `openssl rand -hex 32`), run `sudo systemctl restart pocketbase`, then update any connector that uses the secret URL. OAuth connections are unaffected.
 
 **Adding a project.** Add the new value to the `project` select field in **all four** collections, `topics`, `cards`, `reviews` and `links`, either in the admin UI or with a new migration. The tool enums are read from the `topics` field on every request, so no hook change or restart is needed.
 
@@ -138,8 +152,9 @@ The smoke test works under a random root topic (`smoke-xxxxxx`) in the `dsa` and
 
 ## Security
 
-- Auth is a bearer secret in the URL path. If the secret is unset, every request is rejected. A wrong secret gets an empty 404.
-- The MCP route skips PocketBase's request log, so the secret never reaches the logs database.
+- `POST /mcp` requires an OAuth access token. Without one it answers 401 with a `WWW-Authenticate` header pointing at the discovery document.
+- The legacy `/mcp/<secret>` route is a bearer secret in the URL path. If `MCP_SECRET` is unset, every request to it is rejected. A wrong secret gets an empty 404.
+- The MCP and OAuth routes skip PocketBase's request log. The nginx site keeps the secret URL out of nginx's logs, and tokens travel only in headers and POST bodies, which nginx doesn't log.
 - Every collection's API rules are `null` (superuser only). The hook uses `$app` directly.
 - Protect the admin UI with a strong password and MFA.
 
